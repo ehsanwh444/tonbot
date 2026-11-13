@@ -1,6 +1,6 @@
 import os, json, time, requests
 
-TOKEN = os.environ["9179606432:AAH9xq4mpPr62ns1dMQlFGZhQUJa0n3bnhk"]
+TOKEN = os.environ["BOT_TOKEN"]
 OWNER_ID = 8340627885
 API = f"https://api.telegram.org/bot{TOKEN}"
 FILE = "channels.json"

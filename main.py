@@ -109,7 +109,7 @@ while True:
                     channels.remove(c)
                     save(channels)
                 say(chat, f"🗑 حذف شد: {c}", PANEL_KB)
-    if time.time() - last >= 30:
+        if time.time() - last >= 60:
         last = time.time()
         try:
             text = f"${get_price()}"

@@ -9,6 +9,7 @@ INTERVAL = 60
 
 MAIN_KB = {"keyboard": [[{"text": "🛠 پنل ادمین"}]], "resize_keyboard": True}
 PANEL_KB = {"inline_keyboard": [
+    [{"text": "📢 ارسال پیام به چنل‌ها", "callback_data": "send"}],
     [{"text": "➕ اضافه کردن چنل", "callback_data": "add"}],
     [{"text": "➖ حذف چنل", "callback_data": "remove"}],
     [{"text": "📋 لیست چنل‌ها", "callback_data": "list"}],
@@ -43,14 +44,15 @@ def get_price():
 
 BOT_ID = tg("getMe")["result"]["id"]
 channels = load()
-waiting = False
+state = None
+pending = None
 offset = 0
 last = 0
 
 def add_channel(chat, ch):
-    global waiting
+    global state
     if ch in channels:
-        waiting = False
+        state = None
         say(chat, "این چنل قبلاً اضافه شده.", PANEL_KB)
         return
     info = tg("getChat", chat_id=ch)
@@ -63,8 +65,36 @@ def add_channel(chat, ch):
         return
     channels.append(ch)
     save(channels)
-    waiting = False
+    state = None
     say(chat, f"✅ اضافه شد: {info['result'].get('title', ch)}", PANEL_KB)
+
+def ask_target(chat):
+    if not channels:
+        say(chat, "چنلی اضافه نشده.", PANEL_KB)
+        return
+    rows = [[{"text": "📢 همه چنل‌ها", "callback_data": "sendall"}]]
+    rows += [[{"text": f"📍 {c}", "callback_data": "sendto:" + c}] for c in channels]
+    rows.append([{"text": "❌ لغو", "callback_data": "cancel"}])
+    say(chat, "به کدوم چنل بفرستم؟", {"inline_keyboard": rows})
+
+def deliver(chat, targets):
+    global pending
+    if not pending:
+        say(chat, "پیامی برای ارسال نیست.", PANEL_KB)
+        return
+    ok = 0
+    bad = []
+    for c in targets:
+        r = tg("copyMessage", chat_id=c, from_chat_id=pending[0], message_id=pending[1])
+        if r.get("ok"):
+            ok += 1
+        else:
+            bad.append(c)
+    pending = None
+    text = f"✅ ارسال شد به {ok} چنل."
+    if bad:
+        text += "\n⚠️ ناموفق: " + ", ".join(bad)
+    say(chat, text, PANEL_KB)
 
 while True:
     r = tg("getUpdates", offset=offset, timeout=5)
@@ -81,21 +111,37 @@ while True:
                 continue
             chat, text = msg["chat"]["id"], msg.get("text", "").strip()
             if text == "لغو":
-                waiting = False
+                state = None
+                pending = None
                 say(chat, "لغو شد.", PANEL_KB)
             elif text == "/start":
                 say(chat, "سلام! برای مدیریت چنل‌ها دکمه پایین رو بزن.", MAIN_KB)
             elif text == "🛠 پنل ادمین":
-                waiting = False
+                state = None
                 say(chat, "پنل ادمین:", PANEL_KB)
-            elif waiting:
+            elif state == "add":
                 add_channel(chat, text)
+            elif state == "send":
+                pending = (chat, msg["message_id"])
+                state = None
+                ask_target(chat)
         else:
             chat, data = cb["message"]["chat"]["id"], cb["data"]
             tg("answerCallbackQuery", callback_query_id=cb["id"])
             if data == "add":
-                waiting = True
+                state = "add"
                 say(chat, "آیدی چنل رو بفرست (مثل @mychannel).\nبرای انصراف بنویس: لغو")
+            elif data == "send":
+                state = "send"
+                say(chat, "پیامت رو بفرست (متن، عکس، ویدیو، هر چی).\nبرای انصراف بنویس: لغو")
+            elif data == "sendall":
+                deliver(chat, list(channels))
+            elif data.startswith("sendto:"):
+                deliver(chat, [data[7:]])
+            elif data == "cancel":
+                state = None
+                pending = None
+                say(chat, "لغو شد.", PANEL_KB)
             elif data == "list":
                 say(chat, "چنل‌های فعال:\n" + ("\n".join(channels) or "هیچی"), PANEL_KB)
             elif data == "remove":

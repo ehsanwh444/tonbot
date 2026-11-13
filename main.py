@@ -5,11 +5,11 @@ OWNER_ID = 8340627885
 API = f"https://api.telegram.org/bot{TOKEN}"
 FILE = "channels.json"
 PRICE_URL = "https://api.coingecko.com/api/v3/simple/price?ids=the-open-network&vs_currencies=usd"
-INTERVAL = 60
 
 MAIN_KB = {"keyboard": [[{"text": "🛠 پنل ادمین"}]], "resize_keyboard": True}
 PANEL_KB = {"inline_keyboard": [
     [{"text": "📢 ارسال پیام به چنل‌ها", "callback_data": "send"}],
+    [{"text": "⏱ تنظیم زمان ارسال", "callback_data": "timers"}],
     [{"text": "➕ اضافه کردن چنل", "callback_data": "add"}],
     [{"text": "➖ حذف چنل", "callback_data": "remove"}],
     [{"text": "📋 لیست چنل‌ها", "callback_data": "list"}],
@@ -25,9 +25,12 @@ def tg(method, **data):
 def load():
     try:
         with open(FILE) as f:
-            return json.load(f)
+            d = json.load(f)
+        if isinstance(d, list):
+            return {c: 1.0 for c in d}
+        return {k: float(v) for k, v in d.items()}
     except Exception:
-        return ["@TONWHIR"]
+        return {"@TONWHIR": 1.0}
 
 def save(chs):
     with open(FILE, "w") as f:
@@ -44,10 +47,13 @@ def get_price():
 
 BOT_ID = tg("getMe")["result"]["id"]
 channels = load()
+last_sent = {}
 state = None
+target_ch = None
 pending = None
 offset = 0
-last = 0
+next_try = 0
+price_cache = (None, 0)
 
 def add_channel(chat, ch):
     global state
@@ -63,10 +69,10 @@ def add_channel(chat, ch):
     if m.get("result", {}).get("status") not in ("administrator", "creator"):
         say(chat, "ربات تو این چنل ادمین نیست. اول ادمینش کن و دوباره آیدی رو بفرست.")
         return
-    channels.append(ch)
+    channels[ch] = 1.0
     save(channels)
     state = None
-    say(chat, f"✅ اضافه شد: {info['result'].get('title', ch)}", PANEL_KB)
+    say(chat, f"✅ اضافه شد: {info['result'].get('title', ch)} (هر 1 دقیقه)", PANEL_KB)
 
 def ask_target(chat):
     if not channels:
@@ -95,6 +101,34 @@ def deliver(chat, targets):
     if bad:
         text += "\n⚠️ ناموفق: " + ", ".join(bad)
     say(chat, text, PANEL_KB)
+
+def show_timers(chat):
+    if not channels:
+        say(chat, "چنلی اضافه نشده.", PANEL_KB)
+        return
+    rows = [[{"text": f"📍 {c} — هر {m:g} دقیقه", "callback_data": "tset:" + c}] for c, m in channels.items()]
+    rows.append([{"text": "↩️ برگشت", "callback_data": "panel"}])
+    say(chat, "زمان کدوم چنل رو تغییر بدم؟", {"inline_keyboard": rows})
+
+def show_presets(chat, c):
+    def b(m):
+        return {"text": f"{m} دقیقه", "callback_data": f"tv:{m}:{c}"}
+    rows = [
+        [b(1), b(2), b(5)],
+        [b(10), b(15), b(30)],
+        [b(60), b(180)],
+        [{"text": "✏️ عدد دلخواه", "callback_data": "tc:" + c}],
+        [{"text": "↩️ برگشت", "callback_data": "timers"}],
+    ]
+    say(chat, f"هر چند دقیقه برای {c} قیمت بفرستم؟", {"inline_keyboard": rows})
+
+def get_price_cached():
+    global price_cache
+    p, t = price_cache
+    if p is None or time.time() - t > 20:
+        p = get_price()
+        price_cache = (p, time.time())
+    return p
 
 while True:
     r = tg("getUpdates", offset=offset, timeout=5)
@@ -125,10 +159,26 @@ while True:
                 pending = (chat, msg["message_id"])
                 state = None
                 ask_target(chat)
+            elif state == "interval":
+                try:
+                    v = float(text.replace(",", "."))
+                except ValueError:
+                    say(chat, "فقط عدد بفرست، مثلاً 5 یا 0.5 (یا «لغو»).")
+                    continue
+                if v < 0.5 or v > 1440:
+                    say(chat, "عدد باید بین 0.5 تا 1440 دقیقه باشه.")
+                    continue
+                if target_ch in channels:
+                    channels[target_ch] = v
+                    save(channels)
+                state = None
+                say(chat, f"✅ {target_ch}: هر {v:g} دقیقه", PANEL_KB)
         else:
             chat, data = cb["message"]["chat"]["id"], cb["data"]
             tg("answerCallbackQuery", callback_query_id=cb["id"])
-            if data == "add":
+            if data == "panel":
+                say(chat, "پنل ادمین:", PANEL_KB)
+            elif data == "add":
                 state = "add"
                 say(chat, "آیدی چنل رو بفرست (مثل @mychannel).\nبرای انصراف بنویس: لغو")
             elif data == "send":
@@ -142,8 +192,23 @@ while True:
                 state = None
                 pending = None
                 say(chat, "لغو شد.", PANEL_KB)
+            elif data == "timers":
+                show_timers(chat)
+            elif data.startswith("tset:"):
+                show_presets(chat, data[5:])
+            elif data.startswith("tv:"):
+                _, m, c = data.split(":", 2)
+                if c in channels:
+                    channels[c] = float(m)
+                    save(channels)
+                say(chat, f"✅ {c}: هر {float(m):g} دقیقه", PANEL_KB)
+            elif data.startswith("tc:"):
+                target_ch = data[3:]
+                state = "interval"
+                say(chat, "هر چند دقیقه؟ یه عدد بفرست (مثلاً 5 یا 0.5 برای ۳۰ ثانیه).\nبرای انصراف بنویس: لغو")
             elif data == "list":
-                say(chat, "چنل‌های فعال:\n" + ("\n".join(channels) or "هیچی"), PANEL_KB)
+                lines = [f"{c} — هر {m:g} دقیقه" for c, m in channels.items()]
+                say(chat, "چنل‌های فعال:\n" + ("\n".join(lines) or "هیچی"), PANEL_KB)
             elif data == "remove":
                 if not channels:
                     say(chat, "چنلی نیست.", PANEL_KB)
@@ -153,16 +218,20 @@ while True:
             elif data.startswith("del:"):
                 c = data[4:]
                 if c in channels:
-                    channels.remove(c)
+                    del channels[c]
+                    last_sent.pop(c, None)
                     save(channels)
                 say(chat, f"🗑 حذف شد: {c}", PANEL_KB)
-    if time.time() - last >= INTERVAL:
-        last = time.time()
+    now = time.time()
+    due = [c for c, m in channels.items() if now - last_sent.get(c, 0) >= m * 60]
+    if due and now >= next_try:
         try:
-            text = f"${get_price()}"
-            for c in channels:
+            text = f"${get_price_cached()}"
+            for c in due:
+                last_sent[c] = now
                 res = tg("sendMessage", chat_id=c, text=text)
                 if not res.get("ok"):
                     print(c, res)
         except Exception as e:
             print("خطا:", e)
+            next_try = now + 15

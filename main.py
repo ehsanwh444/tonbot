@@ -5,6 +5,7 @@ OWNER_ID = 8340627885
 API = f"https://api.telegram.org/bot{TOKEN}"
 FILE = "channels.json"
 PRICE_URL = "https://api.coingecko.com/api/v3/simple/price?ids=the-open-network&vs_currencies=usd"
+INTERVAL = 60
 
 MAIN_KB = {"keyboard": [[{"text": "🛠 پنل ادمین"}]], "resize_keyboard": True}
 PANEL_KB = {"inline_keyboard": [
@@ -109,7 +110,7 @@ while True:
                     channels.remove(c)
                     save(channels)
                 say(chat, f"🗑 حذف شد: {c}", PANEL_KB)
-        if time.time() - last >= 60:
+    if time.time() - last >= INTERVAL:
         last = time.time()
         try:
             text = f"${get_price()}"

@@ -338,7 +338,7 @@ ACTIONS = ("cpost", "cdel", "cpin", "ctit", "cdes", "ccheck", "cban", "cunban", 
 
 def ask_user(chat, what):
     say(chat, f"آیدی عددی کاربر رو بفرست تا {what} بشه.\nبرای انصراف بنویس: لغو")
-    while True:
+while True:
     r = tg("getUpdates", offset=offset, timeout=5,
            allowed_updates=["message", "callback_query", "my_chat_member"])
     if not r.get("ok"):

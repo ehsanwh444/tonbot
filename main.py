@@ -83,10 +83,32 @@ def say(chat, text, kb=None):
 def get_price():
     return requests.get(PRICE_URL, timeout=10).json()["the-open-network"]["usd"]
 
+def rate_nobitex():
+    r = requests.post("https://api.nobitex.ir/market/stats",
+                      json={"srcCurrency": "usdt", "dstCurrency": "rls"}, timeout=10).json()
+    latest = next(iter(r["stats"].values()))["latest"]
+    return float(latest) / 10
+
+def rate_wallex():
+    r = requests.get("https://api.wallex.ir/v1/markets", timeout=10).json()
+    return float(r["result"]["symbols"]["USDTTMN"]["stats"]["lastPrice"])
+
+def get_rate():
+    for fn in (rate_nobitex, rate_wallex):
+        try:
+            v = fn()
+            if v > 1000:
+                return v
+        except Exception as e:
+            print("نرخ تتر:", fn.__name__, e)
+    return None
+
 BOT_ID = tg("getMe")["result"]["id"]
 channels = load()
 known = load_known()
 last_sent = {}
+last_price = {}
+last_dot = {}
 state = None
 target_ch = None
 target_cid = None
@@ -94,6 +116,7 @@ pending = None
 offset = 0
 next_try = 0
 price_cache = (None, 0)
+rate_cache = (None, 0)
 
 def add_channel(chat, ch):
     global state
@@ -169,6 +192,14 @@ def get_price_cached():
         p = get_price()
         price_cache = (p, time.time())
     return p
+
+def get_rate_cached():
+    global rate_cache
+    v, t = rate_cache
+    if time.time() - t > 60:
+        v = get_rate() or v
+        rate_cache = (v, time.time())
+    return v
 
 def known_list():
     items = dict(known)
@@ -462,18 +493,30 @@ while True:
                 if c in channels:
                     del channels[c]
                     last_sent.pop(c, None)
+                    last_price.pop(c, None)
+                    last_dot.pop(c, None)
                     save(channels)
                 say(chat, f"🗑 حذف شد: {c}", PANEL_KB)
     now = time.time()
     due = [c for c, m in channels.items() if now - last_sent.get(c, 0) >= m * 60]
     if due and now >= next_try:
         try:
-            text = f"${get_price_cached()}"
+            p = get_price_cached()
+            rate = get_rate_cached()
             for c in due:
                 last_sent[c] = now
+                prev = last_price.get(c)
+                if prev is None or p > prev:
+                    dot = "🟢"
+                elif p < prev:
+                    dot = "🔴"
+                else:
+                    dot = last_dot.get(c, "🟢")
+                text = f"{dot} {p:.4f}$"
+                if rate:
+                    text += f" | {p * rate:,.0f} تومان 🇮🇷"
+                last_price[c] = p
+                last_dot[c] = dot
                 res = tg("sendMessage", chat_id=c, text=text)
                 if not res.get("ok"):
-                    print(c, res)
-        except Exception as e:
-            print("خطا:", e)
-            next_try = now + 15
+         

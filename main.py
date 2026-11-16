@@ -1,12 +1,10 @@
 import os, json, time, requests
-
 TOKEN = os.environ["BOT_TOKEN"]
 OWNER_ID = 8340627885
 API = f"https://api.telegram.org/bot{TOKEN}"
 FILE = "channels.json"
 KNOWN_FILE = "chats.json"
 PRICE_URL = "https://api.coingecko.com/api/v3/simple/price?ids=the-open-network&vs_currencies=usd"
-
 MAIN_KB = {"keyboard": [[{"text": "🛠 پنل ادمین"}]], "resize_keyboard": True}
 PANEL_KB = {"inline_keyboard": [
     [{"text": "📢 ارسال پیام به چنل‌ها", "callback_data": "send"}],
@@ -16,7 +14,6 @@ PANEL_KB = {"inline_keyboard": [
     [{"text": "➖ حذف چنل", "callback_data": "remove"}],
     [{"text": "📋 لیست چنل‌ها", "callback_data": "list"}],
 ]}
-
 PERMS = [
     ("can_manage_chat", "مدیریت چت"),
     ("can_post_messages", "ارسال پیام"),
@@ -32,7 +29,6 @@ PERMS = [
     ("can_post_stories", "استوری"),
     ("is_anonymous", "ادمین ناشناس"),
 ]
-
 STATUS_FA = {
     "creator": "👑 مالک",
     "administrator": "👮 ادمین",
@@ -342,8 +338,7 @@ ACTIONS = ("cpost", "cdel", "cpin", "ctit", "cdes", "ccheck", "cban", "cunban", 
 
 def ask_user(chat, what):
     say(chat, f"آیدی عددی کاربر رو بفرست تا {what} بشه.\nبرای انصراف بنویس: لغو")
-
-while True:
+    while True:
     r = tg("getUpdates", offset=offset, timeout=5,
            allowed_updates=["message", "callback_query", "my_chat_member"])
     if not r.get("ok"):
@@ -523,3 +518,4 @@ while True:
         except Exception as e:
             print("خطا:", e)
             next_try = now + 15
+# END

@@ -519,4 +519,7 @@ while True:
                 last_dot[c] = dot
                 res = tg("sendMessage", chat_id=c, text=text)
                 if not res.get("ok"):
-         
+                    print(c, res)
+        except Exception as e:
+            print("خطا:", e)
+            next_try = now + 15

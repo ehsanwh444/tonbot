@@ -10,6 +10,7 @@ MAIN_KB = {"keyboard": [[{"text": "🛠 پنل ادمین"}]], "resize_keyboard"
 PANEL_KB = {"inline_keyboard": [
     [{"text": "📢 ارسال پیام به چنل‌ها", "callback_data": "send"}],
     [{"text": "🔘 دکمه زیر پیام", "callback_data": "btns"}],
+    [{"text": "💾 بکاپ و بازیابی", "callback_data": "bkp"}],
     [{"text": "🔐 دسترسی‌های ربات", "callback_data": "perms"}],
     [{"text": "⏱ تنظیم زمان ارسال", "callback_data": "timers"}],
     [{"text": "➕ اضافه کردن چنل", "callback_data": "add"}],
@@ -39,6 +40,11 @@ STATUS_FA = {
     "left": "🚪 ترک کرده / عضو نیست",
     "kicked": "🚫 بن شده",
 }
+FIRST_RUN = not os.path.exists(FILE)
+dirty = False
+last_backup = 0
+alerts = {}
+pending_restore = None
 
 def tg(method, **data):
     try:
@@ -46,6 +52,18 @@ def tg(method, **data):
     except Exception as e:
         print("خطا:", e)
         return {"ok": False}
+
+def say(chat, text, kb=None):
+    d = {"chat_id": chat, "text": text}
+    if kb:
+        d["reply_markup"] = kb
+    tg("sendMessage", **d)
+
+def alert(kind, text, cooldown=1800):
+    now = time.time()
+    if now - alerts.get(kind, 0) >= cooldown:
+        alerts[kind] = now
+        say(OWNER_ID, text)
 
 def load():
     try:
@@ -58,8 +76,10 @@ def load():
         return {"@TONWHIR": 1.0}
 
 def save(chs):
+    global dirty
     with open(FILE, "w") as f:
         json.dump(chs, f)
+    dirty = True
 
 def load_known():
     try:
@@ -69,8 +89,10 @@ def load_known():
         return {}
 
 def save_known():
+    global dirty
     with open(KNOWN_FILE, "w") as f:
         json.dump(known, f)
+    dirty = True
 
 def load_buttons():
     try:
@@ -80,14 +102,10 @@ def load_buttons():
         return {}
 
 def save_buttons():
+    global dirty
     with open(BTN_FILE, "w") as f:
         json.dump(buttons, f)
-
-def say(chat, text, kb=None):
-    d = {"chat_id": chat, "text": text}
-    if kb:
-        d["reply_markup"] = kb
-    tg("sendMessage", **d)
+    dirty = True
 
 def get_price():
     return requests.get(PRICE_URL, timeout=10).json()["the-open-network"]["usd"]
@@ -128,6 +146,62 @@ offset = 0
 next_try = 0
 price_cache = (None, 0)
 rate_cache = (None, 0)
+
+def send_backup(caption="💾 بکاپ ربات — برای بازیابی همین فایل رو برای ربات بفرست."):
+    data = json.dumps({"version": 1, "channels": channels, "buttons": buttons, "known": known},
+                      ensure_ascii=False, indent=1).encode("utf-8")
+    try:
+        r = requests.post(f"{API}/sendDocument",
+                          data={"chat_id": OWNER_ID, "caption": caption},
+                          files={"document": ("backup_tonbot.json", data)}, timeout=40).json()
+        return bool(r.get("ok"))
+    except Exception as e:
+        print("بکاپ:", e)
+        return False
+
+def handle_backup_file(chat, file_id):
+    global pending_restore
+    r = tg("getFile", file_id=file_id)
+    if not r.get("ok"):
+        say(chat, "⚠️ فایل رو نتونستم بگیرم.", PANEL_KB)
+        return
+    try:
+        url = f"https://api.telegram.org/file/bot{TOKEN}/{r['result']['file_path']}"
+        d = requests.get(url, timeout=30).json()
+        if not isinstance(d, dict) or not isinstance(d.get("channels"), dict):
+            raise ValueError("bad")
+    except Exception:
+        say(chat, "⚠️ این فایل بکاپ معتبر ربات نیست.", PANEL_KB)
+        return
+    pending_restore = d
+    kb = {"inline_keyboard": [[{"text": "📥 بازیابی", "callback_data": "dorestore"}],
+                              [{"text": "❌ لغو", "callback_data": "cancel"}]]}
+    say(chat, f"📦 بکاپ پیدا شد.\nچنل‌ها: {len(d['channels'])}\nدکمه‌ها: {len(d.get('buttons', {}))}\nبا بازیابی، اطلاعات فعلی جایگزین می‌شه.", kb)
+
+def do_restore(chat):
+    global pending_restore, dirty
+    d = pending_restore
+    if not d:
+        say(chat, "بکاپی برای بازیابی نیست. فایل بکاپ رو دوباره بفرست.", PANEL_KB)
+        return
+    channels.clear()
+    channels.update({k: float(v) for k, v in d["channels"].items()})
+    buttons.clear()
+    buttons.update(d.get("buttons", {}))
+    known.clear()
+    known.update(d.get("known", {}))
+    save(channels)
+    save_buttons()
+    save_known()
+    last_sent.clear()
+    pending_restore = None
+    dirty = False
+    say(chat, f"✅ بازیابی شد. چنل‌ها: {len(channels)}", PANEL_KB)
+
+def show_bkp(chat):
+    kb = {"inline_keyboard": [[{"text": "📤 دریافت بکاپ الان", "callback_data": "bkpnow"}],
+                              [{"text": "↩️ برگشت", "callback_data": "panel"}]]}
+    say(chat, "💾 بکاپ و بازیابی\n\nبعد از هر تغییر، ربات خودش فایل بکاپ رو برات می‌فرسته.\nبرای بازیابی، فایل backup_tonbot.json رو همین‌جا برای ربات بفرست (یا فوروارد کن) تا دکمه‌ی «بازیابی» بیاد.", kb)
 
 def add_channel(chat, ch):
     global state
@@ -249,7 +323,10 @@ def get_rate_cached():
     global rate_cache
     v, t = rate_cache
     if time.time() - t > 60:
-        v = get_rate() or v
+        new = get_rate()
+        if new is None:
+            alert("rate", "⚠️ نرخ تتر (تومان) از نوبیتکس و والکس نیومد. تا وقتی درست بشه، اگه نرخ قبلی هست ازش استفاده می‌شه، وگرنه فقط قیمت دلار ارسال می‌شه.", 3600)
+        v = new or v
         rate_cache = (v, time.time())
     return v
 
@@ -394,7 +471,13 @@ ACTIONS = ("cpost", "cdel", "cpin", "ctit", "cdes", "ccheck", "cban", "cunban", 
 
 def ask_user(chat, what):
     say(chat, f"آیدی عددی کاربر رو بفرست تا {what} بشه.\nبرای انصراف بنویس: لغو")
-while True:
+
+if FIRST_RUN:
+    say(OWNER_ID, "🟢 ربات روشن شد.\n⚠️ فایل ذخیره‌شده‌ای پیدا نشد (اولین اجرا یا پاک شدن فایل‌ها). اگه بکاپ داری، فایل backup_tonbot.json رو برای ربات بفرست تا با یه دکمه برگرده.")
+else:
+    say(OWNER_ID, "🟢 ربات روشن شد.")
+def step():
+    global offset, state, target_ch, target_cid, target_btn, pending, next_try, dirty, last_backup
     r = tg("getUpdates", offset=offset, timeout=5,
            allowed_updates=["message", "callback_query", "my_chat_member"])
     if not r.get("ok"):
@@ -412,6 +495,10 @@ while True:
             if msg["chat"]["type"] != "private":
                 continue
             chat, text = msg["chat"]["id"], msg.get("text", "").strip()
+            doc = msg.get("document")
+            if doc and state is None and doc.get("file_name", "").startswith("backup"):
+                handle_backup_file(chat, doc["file_id"])
+                continue
             if text == "لغو":
                 state = None
                 pending = None
@@ -464,6 +551,14 @@ while True:
             tg("answerCallbackQuery", callback_query_id=cb["id"])
             if data == "panel":
                 say(chat, "پنل ادمین:", PANEL_KB)
+            elif data == "bkp":
+                show_bkp(chat)
+            elif data == "bkpnow":
+                ok = send_backup("💾 بکاپ دستی")
+                if not ok:
+                    say(chat, "⚠️ بکاپ فرستاده نشد.", PANEL_KB)
+            elif data == "dorestore":
+                do_restore(chat)
             elif data == "add":
                 state = "add"
                 say(chat, "آیدی چنل رو بفرست (مثل @mychannel).\nبرای انصراف بنویس: لغو")
@@ -612,7 +707,21 @@ while True:
                     res = tg("sendMessage", chat_id=c, text=text)
                 if not res.get("ok"):
                     print(c, res)
+                    alert("send:" + c, f"⚠️ ارسال قیمت به {c} نشد: {res.get('description', '')}", 1800)
         except Exception as e:
             print("خطا:", e)
+            alert("price", f"⚠️ گرفتن قیمت از CoinGecko خطا داد: {e}", 900)
             next_try = now + 15
+    if dirty and now - last_backup >= 30:
+        dirty = False
+        last_backup = now
+        send_backup("💾 بکاپ خودکار بعد از تغییر")
+
+while True:
+    try:
+        step()
+    except Exception as e:
+        print("خطای اصلی:", e)
+        alert("crash", f"⚠️ ربات یه خطای غیرمنتظره خورد و ادامه می‌ده: {e}", 600)
+        time.sleep(5)
 # END

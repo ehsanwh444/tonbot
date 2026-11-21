@@ -4,10 +4,12 @@ OWNER_ID = 8340627885
 API = f"https://api.telegram.org/bot{TOKEN}"
 FILE = "channels.json"
 KNOWN_FILE = "chats.json"
+BTN_FILE = "buttons.json"
 PRICE_URL = "https://api.coingecko.com/api/v3/simple/price?ids=the-open-network&vs_currencies=usd"
 MAIN_KB = {"keyboard": [[{"text": "🛠 پنل ادمین"}]], "resize_keyboard": True}
 PANEL_KB = {"inline_keyboard": [
     [{"text": "📢 ارسال پیام به چنل‌ها", "callback_data": "send"}],
+    [{"text": "🔘 دکمه زیر پیام", "callback_data": "btns"}],
     [{"text": "🔐 دسترسی‌های ربات", "callback_data": "perms"}],
     [{"text": "⏱ تنظیم زمان ارسال", "callback_data": "timers"}],
     [{"text": "➕ اضافه کردن چنل", "callback_data": "add"}],
@@ -70,6 +72,17 @@ def save_known():
     with open(KNOWN_FILE, "w") as f:
         json.dump(known, f)
 
+def load_buttons():
+    try:
+        with open(BTN_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def save_buttons():
+    with open(BTN_FILE, "w") as f:
+        json.dump(buttons, f)
+
 def say(chat, text, kb=None):
     d = {"chat_id": chat, "text": text}
     if kb:
@@ -102,12 +115,14 @@ def get_rate():
 BOT_ID = tg("getMe")["result"]["id"]
 channels = load()
 known = load_known()
+buttons = load_buttons()
 last_sent = {}
 last_price = {}
 last_dot = {}
 state = None
 target_ch = None
 target_cid = None
+target_btn = None
 pending = None
 offset = 0
 next_try = 0
@@ -160,6 +175,47 @@ def deliver(chat, targets):
     if bad:
         text += "\n⚠️ ناموفق: " + ", ".join(bad)
     say(chat, text, PANEL_KB)
+
+def norm_url(t):
+    t = t.strip()
+    if t.startswith("@"):
+        return "https://t.me/" + t[1:]
+    if t.startswith("t.me/"):
+        return "https://" + t
+    if t.startswith(("http://", "https://", "tg://")):
+        return t
+    return None
+
+def btn_markup(c):
+    b = buttons.get(c)
+    if b and b.get("text") and b.get("url"):
+        return {"inline_keyboard": [[{"text": b["text"], "url": b["url"]}]]}
+    return None
+
+def show_btns(chat):
+    if not channels:
+        say(chat, "چنلی اضافه نشده.", PANEL_KB)
+        return
+    rows = []
+    for c in channels:
+        b = buttons.get(c)
+        label = f"«{b['text']}»" if b and b.get("text") and b.get("url") else "بدون دکمه"
+        rows.append([{"text": f"📍 {c} — {label}", "callback_data": "bset:" + c}])
+    rows.append([{"text": "↩️ برگشت", "callback_data": "panel"}])
+    say(chat, "دکمه‌ی زیر پیام کدوم چنل؟", {"inline_keyboard": rows})
+
+def show_btn_menu(chat, c):
+    b = buttons.get(c, {})
+    txt = f"🔘 دکمه‌ی {c}\nمتن: {b.get('text', '—')}\nلینک: {b.get('url', '—')}"
+    if not (b.get("text") and b.get("url")):
+        txt += "\n(دکمه وقتی نمایش داده می‌شه که هم متن و هم لینک تنظیم شده باشه)"
+    rows = [
+        [{"text": "✏️ تغییر متن", "callback_data": "btxt:" + c},
+         {"text": "🔗 تغییر لینک", "callback_data": "burl:" + c}],
+        [{"text": "🗑 حذف دکمه", "callback_data": "bdel:" + c}],
+        [{"text": "↩️ برگشت", "callback_data": "btns"}],
+    ]
+    say(chat, txt, {"inline_keyboard": rows})
 
 def show_timers(chat):
     if not channels:
@@ -373,6 +429,22 @@ while True:
                 ask_target(chat)
             elif state in ACTIONS:
                 do_action(chat, state, text, msg)
+            elif state == "btext":
+                if target_btn in channels and text:
+                    buttons.setdefault(target_btn, {})["text"] = text[:60]
+                    save_buttons()
+                state = None
+                show_btn_menu(chat, target_btn)
+            elif state == "burl":
+                link = norm_url(text)
+                if not link:
+                    say(chat, "لینک معتبر نیست. با https:// یا @ شروع کن (یا «لغو»).")
+                    continue
+                if target_btn in channels:
+                    buttons.setdefault(target_btn, {})["url"] = link
+                    save_buttons()
+                state = None
+                show_btn_menu(chat, target_btn)
             elif state == "interval":
                 try:
                     v = float(text.replace(",", "."))
@@ -406,6 +478,22 @@ while True:
                 state = None
                 pending = None
                 say(chat, "لغو شد.", PANEL_KB)
+            elif data == "btns":
+                show_btns(chat)
+            elif data.startswith("bset:"):
+                show_btn_menu(chat, data[5:])
+            elif data.startswith("btxt:"):
+                target_btn = data[5:]
+                state = "btext"
+                say(chat, "متن دکمه رو بفرست (مثلاً: 💎 خرید و فروش).\nبرای انصراف بنویس: لغو")
+            elif data.startswith("burl:"):
+                target_btn = data[5:]
+                state = "burl"
+                say(chat, "لینک دکمه رو بفرست (https://... یا @username).\nبرای انصراف بنویس: لغو")
+            elif data.startswith("bdel:"):
+                buttons.pop(data[5:], None)
+                save_buttons()
+                say(chat, "🗑 دکمه حذف شد.", PANEL_KB)
             elif data == "perms":
                 show_perms_list(chat)
             elif data.startswith("cp:"):
@@ -490,7 +578,9 @@ while True:
                     last_sent.pop(c, None)
                     last_price.pop(c, None)
                     last_dot.pop(c, None)
+                    buttons.pop(c, None)
                     save(channels)
+                    save_buttons()
                 say(chat, f"🗑 حذف شد: {c}", PANEL_KB)
     now = time.time()
     due = [c for c, m in channels.items() if now - last_sent.get(c, 0) >= m * 60]
@@ -512,7 +602,14 @@ while True:
                     text += f" | {p * rate:,.0f} تومان 🇮🇷"
                 last_price[c] = p
                 last_dot[c] = dot
-                res = tg("sendMessage", chat_id=c, text=text)
+                kb = btn_markup(c)
+                if kb:
+                    res = tg("sendMessage", chat_id=c, text=text, reply_markup=kb)
+                    if not res.get("ok"):
+                        print(c, res)
+                        res = tg("sendMessage", chat_id=c, text=text)
+                else:
+                    res = tg("sendMessage", chat_id=c, text=text)
                 if not res.get("ok"):
                     print(c, res)
         except Exception as e:

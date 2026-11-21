@@ -70,6 +70,13 @@ def say(chat, text, kb=None):
         d["reply_markup"] = kb
     tg("sendMessage", **d)
 
+def say_reply(chat, text, reply_to=None):
+    if reply_to:
+        tg("sendMessage", chat_id=chat, text=text, reply_to_message_id=reply_to,
+           allow_sending_without_reply=True)
+    else:
+        say(chat, text)
+
 def alert(kind, text, cooldown=1800):
     now = time.time()
     if now - alerts.get(kind, 0) >= cooldown:
@@ -156,6 +163,7 @@ last_price = {}
 last_dot = {}
 last_chart = {}
 last_calc = {}
+bot_admin_cache = {}
 state = None
 target_ch = None
 target_cid = None
@@ -340,8 +348,9 @@ def growth_text():
         avg = total / len(diffs)
         parts.append(f"📍 {c}\n👥 الان: {cur:,}\n📈 تغییر {len(diffs)} روز اخیر: {total:+,}\n🏆 بهترین روز: {best[0]} ({best[1]:+,})\n📉 ضعیف‌ترین روز: {worst[0]} ({worst[1]:+,})\n➗ میانگین روزانه: {avg:+.1f}")
     return "\n\n".join(parts) or "چنلی اضافه نشده."
-
+# END-1
 DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+GROUP_RE = re.compile(r"(?:\$\s*\d[\d,.]*|\d[\d,.]*\s*(?:ton|تون|دلار|\$|usd|dollar|تومان|تومن|toman))")
 
 def parse_calc(text):
     t = text.strip().lower().translate(DIGITS)
@@ -363,24 +372,29 @@ def parse_calc(text):
 def fmt_ton(x):
     return f"{x:,.4f}".rstrip("0").rstrip(".")
 
-def calc_reply(chat, text):
+def cooldown_ok(key, secs):
     now = time.time()
-    if now - last_calc.get(chat, 0) < 1:
+    if now - last_calc.get(key, 0) < secs:
+        return False
+    last_calc[key] = now
+    return True
+
+def calc_reply(chat, text, reply_to=None, key=None, cooldown=1):
+    if not cooldown_ok(key or chat, cooldown):
         return
-    last_calc[chat] = now
     parsed = parse_calc(text)
     if not parsed:
-        say(chat, PUBLIC_HELLO)
+        say_reply(chat, PUBLIC_HELLO, reply_to)
         return
     value, unit = parsed
     try:
         p = get_price_cached()
     except Exception:
-        say(chat, "قیمت فعلاً در دسترس نیست. کمی بعد دوباره امتحان کن.")
+        say_reply(chat, "قیمت فعلاً در دسترس نیست. کمی بعد دوباره امتحان کن.", reply_to)
         return
     rate = get_rate_cached()
     if unit == "irt" and not rate:
-        say(chat, "نرخ تومان فعلاً در دسترس نیست. کمی بعد دوباره امتحان کن.")
+        say_reply(chat, "نرخ تومان فعلاً در دسترس نیست. کمی بعد دوباره امتحان کن.", reply_to)
         return
     if unit == "ton":
         ton = value
@@ -393,7 +407,55 @@ def calc_reply(chat, text):
     if rate:
         lines.append(f"🇮🇷 {usd * rate:,.0f} تومان")
     lines += ["", f"📊 قیمت هر TON: {p:.4f}$"]
-    say(chat, "\n".join(lines))
+    say_reply(chat, "\n".join(lines), reply_to)
+
+def price_reply(chat, reply_to, key):
+    if not cooldown_ok(key, 5):
+        return
+    try:
+        p = get_price_cached()
+    except Exception:
+        say_reply(chat, "قیمت فعلاً در دسترس نیست.", reply_to)
+        return
+    rate = get_rate_cached()
+    text = f"💎 TON: {p:.4f}$"
+    if rate:
+        text += f" | {p * rate:,.0f} تومان 🇮🇷"
+    say_reply(chat, text, reply_to)
+
+def bot_is_admin(chat):
+    ok, t = bot_admin_cache.get(chat, (False, 0))
+    if time.time() - t > 600:
+        m = tg("getChatMember", chat_id=chat, user_id=BOT_ID).get("result", {})
+        ok = m.get("status") in ("administrator", "creator")
+        bot_admin_cache[chat] = (ok, time.time())
+    return ok
+
+def group_calc(msg):
+    text = (msg.get("text") or "").strip()
+    frm = msg.get("from") or {}
+    if not text or frm.get("is_bot"):
+        return
+    chat = msg["chat"]["id"]
+    is_price = False
+    if text.startswith("/"):
+        cmd, _, rest = text.partition(" ")
+        cmd = cmd.split("@")[0].lower()
+        if cmd == "/price":
+            is_price = True
+        elif cmd == "/calc" and rest.strip():
+            text = rest.strip()
+        else:
+            return
+    elif not GROUP_RE.fullmatch(text.translate(DIGITS).lower().strip()):
+        return
+    if not bot_is_admin(chat):
+        return
+    key = (chat, frm.get("id"))
+    if is_price:
+        price_reply(chat, msg["message_id"], key)
+    else:
+        calc_reply(chat, text, msg["message_id"], key, 5)
 
 def send_backup(caption="💾 بکاپ ربات — برای بازیابی همین فایل رو برای ربات بفرست."):
     data = json.dumps({"version": 2, "channels": channels, "buttons": buttons, "known": known,
@@ -570,7 +632,145 @@ def known_list():
     return items
 
 def show_perms_list(chat):
-    items = kn
+    items = known_list()
+    if not items:
+        say(chat, "هنوز جایی ثبت نشده که ربات توش ادمین باشه.", PANEL_KB)
+        return
+    rows = [[{"text": f"🔐 {t}", "callback_data": "cp:" + i}] for i, t in items.items()]
+    rows.append([{"text": "↩️ برگشت", "callback_data": "panel"}])
+    say(chat, "ربات تو کدوم چت؟", {"inline_keyboard": rows})
+
+def show_chat(chat, cid):
+    info = tg("getChat", chat_id=cid).get("result", {})
+    title = info.get("title", str(cid))
+    m = tg("getChatMember", chat_id=cid, user_id=BOT_ID).get("result", {})
+    st = m.get("status")
+    if st not in ("administrator", "creator"):
+        say(chat, f"ربات تو «{title}» ادمین نیست.", PANEL_KB)
+        return
+    def can(k, default=False):
+        return True if st == "creator" else bool(m.get(k, default))
+    lines = [f"🔐 دسترسی‌های ربات تو «{title}»"]
+    if st == "creator":
+        lines.append("ربات مالک این چت است (همه دسترسی‌ها).")
+    else:
+        for k, n in PERMS:
+            if k in m:
+                lines.append(("✅ " if m[k] else "❌ ") + n)
+    rows = []
+    if can("can_post_messages", True):
+        rows.append([{"text": "📝 ارسال پیام", "callback_data": f"tpost:{cid}"}])
+    if can("can_delete_messages"):
+        rows.append([{"text": "🗑 حذف پیام", "callback_data": f"tdel:{cid}"}])
+    if can("can_pin_messages") or can("can_edit_messages"):
+        rows.append([{"text": "📌 پین کردن پیام", "callback_data": f"tpin:{cid}"}])
+    if can("can_invite_users"):
+        rows.append([{"text": "🔗 ساخت لینک دعوت", "callback_data": f"tinv:{cid}"}])
+    if can("can_change_info"):
+        rows.append([{"text": "✏️ تغییر نام", "callback_data": f"ttit:{cid}"},
+                     {"text": "📄 تغییر توضیحات", "callback_data": f"tdes:{cid}"}])
+    rows.append([{"text": "👥 تعداد اعضا", "callback_data": f"tcount:{cid}"},
+                 {"text": "👮 ادمین‌ها", "callback_data": f"tadm:{cid}"}])
+    rows.append([{"text": "🔎 چک کاربر", "callback_data": f"tchk:{cid}"}])
+    if can("can_restrict_members"):
+        rows.append([{"text": "🚫 بن", "callback_data": f"tban:{cid}"},
+                     {"text": "✅ آنبن", "callback_data": f"tunban:{cid}"},
+                     {"text": "👢 کیک", "callback_data": f"tkick:{cid}"}])
+    rows.append([{"text": "↩️ برگشت", "callback_data": "perms"}])
+    say(chat, "\n".join(lines), {"inline_keyboard": rows})
+
+def show_admins(chat, cid):
+    r = tg("getChatAdministrators", chat_id=cid)
+    if not r.get("ok"):
+        say(chat, "⚠️ نشد: " + str(r.get("description", "")), PANEL_KB)
+        return
+    lines = ["👮 ادمین‌ها:"]
+    for a in r["result"][:50]:
+        u = a["user"]
+        name = u.get("first_name", "")
+        un = f" @{u['username']}" if u.get("username") else ""
+        crown = "👑 " if a["status"] == "creator" else ""
+        bot = " 🤖" if u.get("is_bot") else ""
+        lines.append(f"{crown}{name}{un}{bot} — {u['id']}")
+    say(chat, "\n".join(lines), PANEL_KB)
+
+def do_action(chat, kind, text, msg):
+    global state
+    cid = target_cid
+    if kind == "cpost":
+        r = tg("copyMessage", chat_id=cid, from_chat_id=chat, message_id=msg["message_id"])
+    elif kind in ("cdel", "cpin"):
+        try:
+            mid = int(text.rstrip("/").split("/")[-1])
+        except ValueError:
+            say(chat, "آیدی عددی پیام یا لینکش رو بفرست (یا «لغو»).")
+            return
+        r = tg("deleteMessage" if kind == "cdel" else "pinChatMessage", chat_id=cid, message_id=mid)
+    elif kind == "ctit":
+        r = tg("setChatTitle", chat_id=cid, title=text)
+    elif kind == "cdes":
+        r = tg("setChatDescription", chat_id=cid, description=text)
+    else:
+        t = text.strip()
+        if not t.isdigit():
+            say(chat, "آیدی عددی کاربر رو بفرست (یا «لغو»). یوزرنیم جواب نمی‌ده.")
+            return
+        uid = int(t)
+        if uid in (OWNER_ID, BOT_ID):
+            state = None
+            say(chat, "این کار روی این کاربر مجاز نیست.", PANEL_KB)
+            return
+        if kind == "ccheck":
+            r = tg("getChatMember", chat_id=cid, user_id=uid)
+            state = None
+            if r.get("ok"):
+                m = r["result"]
+                u = m["user"]
+                un = f" @{u['username']}" if u.get("username") else ""
+                say(chat, f"🔎 {u.get('first_name', '')}{un}\nآیدی: {u['id']}\nوضعیت: {STATUS_FA.get(m['status'], m['status'])}", PANEL_KB)
+            else:
+                say(chat, "⚠️ نشد: " + str(r.get("description", "")), PANEL_KB)
+            return
+        elif kind == "cban":
+            r = tg("banChatMember", chat_id=cid, user_id=uid)
+        elif kind == "cunban":
+            r = tg("unbanChatMember", chat_id=cid, user_id=uid, only_if_banned=True)
+        else:
+            r = tg("banChatMember", chat_id=cid, user_id=uid)
+            if r.get("ok"):
+                r = tg("unbanChatMember", chat_id=cid, user_id=uid, only_if_banned=True)
+    state = None
+    say(chat, "✅ انجام شد." if r.get("ok") else "⚠️ نشد: " + str(r.get("description", "")), PANEL_KB)
+
+def handle_my_chat_member(m):
+    chat = m["chat"]
+    if chat["type"] == "private":
+        return
+    st = m["new_chat_member"]["status"]
+    key = str(chat["id"])
+    title = chat.get("title", key)
+    bot_admin_cache[chat["id"]] = (st in ("administrator", "creator"), time.time())
+    if st == "administrator":
+        was = key in known
+        known[key] = title
+        save_known()
+        txt = f"🔄 دسترسی‌های ربات تو «{title}» تغییر کرد." if was else f"🔔 ربات تو «{title}» ادمین شد."
+        say(OWNER_ID, txt, {"inline_keyboard": [[{"text": "🔐 مشاهده دسترسی‌ها", "callback_data": "cp:" + key}]]})
+    elif key in known:
+        del known[key]
+        save_known()
+        say(OWNER_ID, f"⚠️ ربات دیگه تو «{title}» ادمین نیست.")
+
+ACTIONS = ("cpost", "cdel", "cpin", "ctit", "cdes", "ccheck", "cban", "cunban", "ckick")
+
+def ask_user(chat, what):
+    say(chat, f"آیدی عددی کاربر رو بفرست تا {what} بشه.\nبرای انصراف بنویس: لغو")
+
+if FIRST_RUN:
+    say(OWNER_ID, "🟢 ربات روشن شد.\n⚠️ فایل ذخیره‌شده‌ای پیدا نشد (اولین اجرا یا پاک شدن فایل‌ها). اگه بکاپ داری، فایل backup_tonbot.json رو برای ربات بفرست تا با یه دکمه برگرده.")
+else:
+    say(OWNER_ID, "🟢 ربات روشن شد.")
+# END-2
 def step():
     global offset, state, target_ch, target_cid, target_btn, pending, next_try, dirty, last_backup
     r = tg("getUpdates", offset=offset, timeout=5,
@@ -585,6 +785,9 @@ def step():
         msg, cb = u.get("message"), u.get("callback_query")
         src = msg or cb
         if not src:
+            continue
+        if msg and msg["chat"]["type"] in ("group", "supergroup"):
+            group_calc(msg)
             continue
         if src["from"]["id"] != OWNER_ID:
             if msg and msg["chat"]["type"] == "private" and msg.get("text"):

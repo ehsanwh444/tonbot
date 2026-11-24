@@ -784,7 +784,6 @@ else:
     say(OWNER_ID, "🟢 ربات روشن شد.")
 # END-2
 def step():
-    
     global offset, state, target_ch, target_cid, target_btn, pending, next_try, dirty, last_backup
     r = tg("getUpdates", offset=offset, timeout=5,
            allowed_updates=["message", "callback_query", "my_chat_member"])

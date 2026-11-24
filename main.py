@@ -784,6 +784,45 @@ else:
     say(OWNER_ID, "🟢 ربات روشن شد.")
 # END-2
 def step():
+def clear_old_chart_pins(c):
+    for _ in range(10):
+        info = tg("getChat", chat_id=c).get("result", {})
+        pm = info.get("pinned_message")
+        if not pm or not (pm.get("caption") or "").startswith("📈 نمودار"):
+            return
+        r = tg("unpinChatMessage", chat_id=c, message_id=pm["message_id"])
+        if not r.get("ok"):
+            alert("unpin:" + c, f"⚠️ برداشتن پین نمودار قبلی تو {c} نشد: {r.get('description', '')}", 3600)
+            return
+
+def post_chart(c):
+    if Image is None:
+        alert("pil", "⚠️ کتابخانه‌ی pillow نصب نیست. تو فایل requirements.txt یه خط جدید با کلمه‌ی pillow اضافه کن.", 86400)
+        return False
+    try:
+        png, hi, lo, chg = make_chart(get_history_cached())
+    except Exception as e:
+        alert("chart", f"⚠️ ساخت نمودار نشد: {e}", 1800)
+        return False
+    cap = f"📈 نمودار ۲۴ ساعته TON\n🔼 بالاترین: {hi:.4f}$\n🔽 پایین‌ترین: {lo:.4f}$\n📊 تغییر: {chg:+.2f}%"
+    data = {"chat_id": c, "caption": cap}
+    kb = btn_markup(c)
+    if kb:
+        data["reply_markup"] = json.dumps(kb)
+    try:
+        r = requests.post(f"{API}/sendPhoto", data=data, files={"photo": ("chart.png", png)}, timeout=60).json()
+    except Exception as e:
+        alert("chartsend:" + c, f"⚠️ ارسال نمودار به {c} نشد: {e}", 1800)
+        return False
+    if not r.get("ok"):
+        alert("chartsend:" + c, f"⚠️ ارسال نمودار به {c} نشد: {r.get('description', '')}", 1800)
+        return False
+    mid = r["result"]["message_id"]
+    clear_old_chart_pins(c)
+    res = tg("pinChatMessage", chat_id=c, message_id=mid, disable_notification=True)
+    if not res.get("ok"):
+        alert("pin:" + c, f"⚠️ پین نمودار تو {c} نشد: {res.get('description', '')}\nربات تو چنل باید دسترسی «ویرایش پیام‌ها» (Edit messages) داشته باشه.", 3600)
+    return True
     global offset, state, target_ch, target_cid, target_btn, pending, next_try, dirty, last_backup
     r = tg("getUpdates", offset=offset, timeout=5,
            allowed_updates=["message", "callback_query", "my_chat_member"])

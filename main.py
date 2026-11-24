@@ -11,6 +11,7 @@ KNOWN_FILE = "chats.json"
 BTN_FILE = "buttons.json"
 CHART_FILE = "charts.json"
 STATS_FILE = "stats.json"
+PIN_FILE = "pins.json"
 TZ_OFFSET = 3.5
 PRICE_URL = "https://api.coingecko.com/api/v3/simple/price?ids=the-open-network&vs_currencies=usd"
 HIST_URL = "https://api.coingecko.com/api/v3/coins/the-open-network/market_chart?vs_currency=usd&days=1"
@@ -289,6 +290,17 @@ def post_chart(c):
     if not r.get("ok"):
         alert("chartsend:" + c, f"⚠️ ارسال نمودار به {c} نشد: {r.get('description', '')}", 1800)
         return False
+    mid = r["result"]["message_id"]
+    pins = load_json(PIN_FILE)
+    old = pins.get(c)
+    res = tg("pinChatMessage", chat_id=c, message_id=mid, disable_notification=True)
+    if res.get("ok"):
+        if old:
+            tg("unpinChatMessage", chat_id=c, message_id=old)
+        pins[c] = mid
+        save_json(PIN_FILE, pins)
+    else:
+        alert("pin:" + c, f"⚠️ پین نمودار تو {c} نشد: {res.get('description', '')}\nربات تو چنل باید دسترسی «ویرایش پیام‌ها» (Edit messages) داشته باشه.", 3600)
     return True
 
 def show_chart_list(chat):

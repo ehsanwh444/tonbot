@@ -4,7 +4,7 @@ try:
 except Exception:
     Image = None
 TOKEN = os.environ["BOT_TOKEN"]
-OWNER_ID = 8340627885
+OWNER_ID = 2012619079
 API = f"https://api.telegram.org/bot{TOKEN}"
 FILE = "channels.json"
 KNOWN_FILE = "chats.json"

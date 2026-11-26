@@ -11,7 +11,6 @@ KNOWN_FILE = "chats.json"
 BTN_FILE = "buttons.json"
 CHART_FILE = "charts.json"
 STATS_FILE = "stats.json"
-PIN_FILE = "pins.json"
 TZ_OFFSET = 3.5
 PRICE_URL = "https://api.coingecko.com/api/v3/simple/price?ids=the-open-network&vs_currencies=usd"
 HIST_URL = "https://api.coingecko.com/api/v3/coins/the-open-network/market_chart?vs_currency=usd&days=1"
@@ -268,6 +267,17 @@ def btn_markup(c):
         return {"inline_keyboard": [[{"text": b["text"], "url": b["url"]}]]}
     return None
 
+def clear_old_chart_pins(c):
+    for _ in range(10):
+        info = tg("getChat", chat_id=c).get("result", {})
+        pm = info.get("pinned_message")
+        if not pm or not (pm.get("caption") or "").startswith("📈 نمودار"):
+            return
+        r = tg("unpinChatMessage", chat_id=c, message_id=pm["message_id"])
+        if not r.get("ok"):
+            alert("unpin:" + c, f"⚠️ برداشتن پین نمودار قبلی تو {c} نشد: {r.get('description', '')}", 3600)
+            return
+
 def post_chart(c):
     if Image is None:
         alert("pil", "⚠️ کتابخانه‌ی pillow نصب نیست. تو فایل requirements.txt یه خط جدید با کلمه‌ی pillow اضافه کن.", 86400)
@@ -291,15 +301,9 @@ def post_chart(c):
         alert("chartsend:" + c, f"⚠️ ارسال نمودار به {c} نشد: {r.get('description', '')}", 1800)
         return False
     mid = r["result"]["message_id"]
-    pins = load_json(PIN_FILE)
-    old = pins.get(c)
+    clear_old_chart_pins(c)
     res = tg("pinChatMessage", chat_id=c, message_id=mid, disable_notification=True)
-    if res.get("ok"):
-        if old:
-            tg("unpinChatMessage", chat_id=c, message_id=old)
-        pins[c] = mid
-        save_json(PIN_FILE, pins)
-    else:
+    if not res.get("ok"):
         alert("pin:" + c, f"⚠️ پین نمودار تو {c} نشد: {res.get('description', '')}\nربات تو چنل باید دسترسی «ویرایش پیام‌ها» (Edit messages) داشته باشه.", 3600)
     return True
 
